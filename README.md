@@ -62,6 +62,15 @@ python prepare_data_local.py
 4. Python version: 3.12
 5. The platform installs from `requirements.txt` and boots automatically.
 
+### Notes for Streamlit Cloud
+- The requirements are pinned to work on both Windows (local) and Linux (Cloud):
+  - FAISS uses `faiss-cpu==1.12.0` on Windows and `faiss-cpu==1.8.0.post1` on Linux via environment markers.
+  - Torch is pinned to `2.4.0` for reliable CPU wheels on Cloud.
+- If the installer fails, try “Restart” in Cloud. If it persists:
+  - Clear the app cache in the Cloud app settings.
+  - Ensure there is enough disk space (remove large artifacts).
+  - If you still hit errors, open the app logs and share the error block.
+
 ## Troubleshooting
 - Port already in use:
   - Change port: `streamlit run app.py --server.port 8502`
