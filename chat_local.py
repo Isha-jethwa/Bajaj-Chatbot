@@ -54,4 +54,5 @@ def ask_bot(question):
 while True:
     q = input("Ask: ")
     if q.lower() in ["exit","quit"]: break
-    print("Answer:", ask_bot(q))
+    a = ask_bot(q)
+    print(q + "\n\n" + a)
