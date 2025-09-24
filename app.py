@@ -93,27 +93,30 @@ def build_index_from_docs(docs_dir: str, chunk_size: int, overlap: int, index_fi
     faiss.write_index(index, index_file)
 
 
-def search_docs(query: str, embedder: SentenceTransformer, index, all_chunks, top_k: int = 8):
-    query_embedding = embedder.encode([query])
+def search_docs(query: str, embedder: SentenceTransformer, index, all_chunks, top_k: int = 16):
+    # Bias the query towards BFL standalone
+    biased_query = f"{query} Bajaj Finance Limited BFL standalone (not Bajaj Finserv, not consolidated, not Bajaj Broking, not Bajaj Housing Finance) GNPA"
+    query_embedding = embedder.encode([biased_query])
     distances, indices = index.search(query_embedding, top_k)
     return [all_chunks[i][1] for i in indices[0]]
 
 
 # --- Domain aware extractors ---
 PCT_RE = re.compile(r"([0-9]+\.?[0-9]*)\s*%")
-
-KEYWORDS_PREFER = re.compile(r"\b(BFL|Bajaj\s+Finance|quarter|up\s*from|vs\.?|previous\s*quarter|bps|basis\s*points)\b", re.I)
+KEYWORDS_PREFER = re.compile(r"\b(BFL|Bajaj\s+Finance|Finance\s+Limited|standalone|quarter|up\s*from|vs\.?|previous\s*quarter|bps|basis\s*points)\b", re.I)
+EXCLUDE_ENTITIES = re.compile(r"\b(Bajaj\s*Finserv|consolidated|Bajaj\s*Broking|BHFL|Bajaj\s*Housing\s*Finance)\b", re.I)
 
 
 def score_sentence(sent: str, nums: List[str]) -> int:
     score = 0
     if re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
-        score += 2
+        score += 3
     if KEYWORDS_PREFER.search(sent):
-        score += 2
+        score += 3
+    if EXCLUDE_ENTITIES.search(sent):
+        score -= 6
     if len(nums) >= 2:
         score += 2
-    # Prefer realistic GNPA band ~0.7% to 1.6%
     try:
         vals = [float(n) for n in nums]
         if any(0.7 <= v <= 1.6 for v in vals):
@@ -127,7 +130,7 @@ def extract_gnpa_answer(text: str) -> Optional[str]:
     sentences = re.split(r"(?<=[\.!?])\s+|\n+", text)
     best = None
     best_nums: List[str] = []
-    best_score = -1
+    best_score = -10
     for sent in sentences:
         if not re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
             continue
@@ -138,6 +141,9 @@ def extract_gnpa_answer(text: str) -> Optional[str]:
         if sc > best_score:
             best, best_nums, best_score = sent, nums, sc
     if not best:
+        return None
+    # Ensure the sentence is not clearly about excluded entities
+    if EXCLUDE_ENTITIES.search(best):
         return None
     latest = best_nums[0]
     prev = None
@@ -156,7 +162,21 @@ def answer_question(question: str):
     index, all_chunks = load_index_and_chunks()
     qa = load_qa_pipeline()
 
-    context_chunks = search_docs(question, embedder, index, all_chunks, top_k=8)
+    raw_chunks = search_docs(question, embedder, index, all_chunks, top_k=16)
+
+    # Re-rank chunks to prioritize BFL standalone and de-prioritize others
+    def chunk_score(ch: str) -> int:
+        s = 0
+        if re.search(r"\b(BFL|Bajaj\s+Finance|Finance\s+Limited|standalone)\b", ch, re.I):
+            s += 5
+        if EXCLUDE_ENTITIES.search(ch):
+            s -= 6
+        if re.search(r"\bGNPA|Gross\s*NPA\b", ch, re.I):
+            s += 3
+        return s
+
+    ranked = sorted(raw_chunks, key=chunk_score, reverse=True)
+    context_chunks = ranked[:8]
     context = " \n".join(context_chunks)
 
     # Heuristic: if user asks about GNPA/NPAs, prefer precise extractor
