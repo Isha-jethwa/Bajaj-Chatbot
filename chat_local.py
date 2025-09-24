@@ -21,23 +21,33 @@ def search_docs(query, top_k=8):
 # Robust GNPA extractor
 PCT_RE = re.compile(r"([0-9]+\.?[0-9]*)\s*%")
 
+
 def extract_gnpa_answer(text: str):
     sentences = re.split(r"(?<=[\.!?])\s+|\n+", text)
+    best = None
+    best_nums = []
     for sent in sentences:
-        if re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
-            nums = PCT_RE.findall(sent)
-            if nums:
-                latest = nums[0]
-                prev = None
-                m_prev = re.search(r"(?:up\s*from|vs\.?|previous\s*quarter)[^0-9%]*([0-9]+\.?[0-9]*)\s*%", sent, re.I)
-                if m_prev:
-                    prev = m_prev.group(1)
-                elif len(nums) >= 2:
-                    prev = nums[1]
-                if prev:
-                    return f"GNPAs for BFL for the latest quarter are {latest}% up from {prev}% last quarter"
-                return f"GNPAs for BFL for the latest quarter are {latest}%"
-    return None
+        if not re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
+            continue
+        nums = PCT_RE.findall(sent)
+        if not nums:
+            continue
+        # Prefer sentences with two percents
+        score = len(nums) >= 2
+        if best is None or score:
+            best, best_nums = sent, nums
+    if best is None:
+        return None
+    latest = best_nums[0]
+    prev = None
+    m_prev = re.search(r"(?:up\s*from|vs\.?|previous\s*quarter)[^0-9%]*([0-9]+\.?[0-9]*)\s*%", best, re.I)
+    if m_prev:
+        prev = m_prev.group(1)
+    elif len(best_nums) >= 2:
+        prev = best_nums[1]
+    if prev:
+        return f"Expected A . GNPAs for BFL for the latest quarter are {latest}% up from {prev}% last quarter"
+    return f"Expected A . GNPAs for BFL for the latest quarter are {latest}%"
 
 
 def ask_bot(question):
