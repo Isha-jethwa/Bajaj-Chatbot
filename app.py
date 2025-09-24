@@ -219,24 +219,6 @@ st.set_page_config(page_title="Bajaj Chatbot", page_icon="🤖", layout="centere
 st.title("Bajaj Document QA 🤖")
 st.caption("Ask questions about the PDFs in the `docs/` folder. Uses FAISS retrieval + DistilBERT QA.")
 
-# Sidebar controls
-with st.sidebar:
-    st.header("Index")
-    if st.button("Rebuild index from docs", type="primary"):
-        with st.spinner("Rebuilding index from PDFs in docs/..."):
-            try:
-                # Clear cached resources so they reload after rebuild
-                load_index_and_chunks.clear()
-                build_index_from_docs(docs_dir="docs", chunk_size=500, overlap=100, index_file="faiss_index.idx", chunks_file="chunks.pkl")
-                st.success("Index rebuilt successfully.")
-            except Exception as e:
-                # Give actionable hints for OCR prerequisites
-                hint = ""
-                if "No text extracted" in str(e):
-                    if convert_from_path is None or pytesseract is None:
-                        hint = "\nHint: Install OCR deps: pdf2image, pytesseract; also install Poppler and Tesseract OCR on your system. Set POPPLER_PATH env var if needed."
-                st.error(f"Failed to rebuild: {e}{hint}")
-
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
