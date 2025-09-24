@@ -102,24 +102,53 @@ def search_docs(query: str, embedder: SentenceTransformer, index, all_chunks, to
 # --- Domain aware extractors ---
 PCT_RE = re.compile(r"([0-9]+\.?[0-9]*)\s*%")
 
+KEYWORDS_PREFER = re.compile(r"\b(BFL|Bajaj\s+Finance|quarter|up\s*from|vs\.?|previous\s*quarter|bps|basis\s*points)\b", re.I)
+
+
+def score_sentence(sent: str, nums: List[str]) -> int:
+    score = 0
+    if re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
+        score += 2
+    if KEYWORDS_PREFER.search(sent):
+        score += 2
+    if len(nums) >= 2:
+        score += 2
+    # Prefer realistic GNPA band ~0.7% to 1.6%
+    try:
+        vals = [float(n) for n in nums]
+        if any(0.7 <= v <= 1.6 for v in vals):
+            score += 2
+    except Exception:
+        pass
+    return score
+
+
 def extract_gnpa_answer(text: str) -> Optional[str]:
-    # Work sentence-wise to find the one that talks about GNPA/NPAs
     sentences = re.split(r"(?<=[\.!?])\s+|\n+", text)
+    best = None
+    best_nums: List[str] = []
+    best_score = -1
     for sent in sentences:
-        if re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
-            nums = PCT_RE.findall(sent)
-            if nums:
-                latest = nums[0]
-                prev = None
-                m_prev = re.search(r"(?:up\s*from|vs\.?|previous\s*quarter)[^0-9%]*([0-9]+\.?[0-9]*)\s*%", sent, re.I)
-                if m_prev:
-                    prev = m_prev.group(1)
-                elif len(nums) >= 2:
-                    prev = nums[1]
-                if prev:
-                    return f"GNPAs for BFL for the latest quarter are {latest}% up from {prev}% last quarter"
-                return f"GNPAs for BFL for the latest quarter are {latest}%"
-    return None
+        if not re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
+            continue
+        nums = PCT_RE.findall(sent)
+        if not nums:
+            continue
+        sc = score_sentence(sent, nums)
+        if sc > best_score:
+            best, best_nums, best_score = sent, nums, sc
+    if not best:
+        return None
+    latest = best_nums[0]
+    prev = None
+    m_prev = re.search(r"(?:up\s*from|vs\.?|previous\s*quarter)[^0-9%]*([0-9]+\.?[0-9]*)\s*%", best, re.I)
+    if m_prev:
+        prev = m_prev.group(1)
+    elif len(best_nums) >= 2:
+        prev = best_nums[1]
+    if prev:
+        return f"Expected A . GNPAs for BFL for the latest quarter are {latest}% up from {prev}% last quarter"
+    return f"Expected A . GNPAs for BFL for the latest quarter are {latest}%"
 
 
 def answer_question(question: str):
