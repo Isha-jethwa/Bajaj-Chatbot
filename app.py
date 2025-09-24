@@ -5,6 +5,12 @@ import streamlit as st
 from pypdf import PdfReader
 from typing import List, Tuple, Optional
 
+# Optional fallback import for better PDF text extraction
+try:
+    import fitz  # PyMuPDF
+except Exception:
+    fitz = None
+
 # --- Caching loaders to avoid reloading on each interaction ---
 @st.cache_resource(show_spinner=False)
 def load_embedder():
@@ -38,11 +44,27 @@ def split_text(text: str, size: int = 500, overlap: int = 100) -> List[str]:
 
 
 def extract_text(pdf_path: str) -> str:
+    # First try pypdf
     try:
         reader = PdfReader(pdf_path)
-        return "\n".join([p.extract_text() or "" for p in reader.pages])
+        text = "\n".join([p.extract_text() or "" for p in reader.pages])
+        if text and text.strip():
+            return text
     except Exception:
-        return ""
+        pass
+    # Fallback to PyMuPDF if available (often better with complex PDFs)
+    try:
+        if fitz is not None:
+            with fitz.open(pdf_path) as doc:
+                parts = []
+                for page in doc:
+                    parts.append(page.get_text("text"))
+                text2 = "\n".join(parts)
+                if text2 and text2.strip():
+                    return text2
+    except Exception:
+        pass
+    return ""
 
 
 def build_index_from_docs(docs_dir: str, chunk_size: int, overlap: int, index_file: str, chunks_file: str):
@@ -87,10 +109,8 @@ def extract_gnpa_answer(text: str) -> Optional[str]:
         if re.search(r"\b(gross\s*npa\w*|gnpa\w*)\b", sent, re.I):
             nums = PCT_RE.findall(sent)
             if nums:
-                # Pick first as latest; if a second exists, treat as previous
                 latest = nums[0]
                 prev = None
-                # Prefer numbers following cues like "up from" or "vs"
                 m_prev = re.search(r"(?:up\s*from|vs\.?|previous\s*quarter)[^0-9%]*([0-9]+\.?[0-9]*)\s*%", sent, re.I)
                 if m_prev:
                     prev = m_prev.group(1)
