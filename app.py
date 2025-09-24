@@ -11,6 +11,16 @@ try:
 except Exception:
     fitz = None
 
+# Optional OCR dependencies
+try:
+    from pdf2image import convert_from_path  # requires poppler on system
+    import pytesseract
+    from PIL import Image
+except Exception:
+    convert_from_path = None
+    pytesseract = None
+    Image = None
+
 # --- Caching loaders to avoid reloading on each interaction ---
 @st.cache_resource(show_spinner=False)
 def load_embedder():
@@ -44,7 +54,7 @@ def split_text(text: str, size: int = 500, overlap: int = 100) -> List[str]:
 
 
 def extract_text(pdf_path: str) -> str:
-    # First try pypdf
+    # 1) Try pypdf
     try:
         reader = PdfReader(pdf_path)
         text = "\n".join([p.extract_text() or "" for p in reader.pages])
@@ -52,7 +62,8 @@ def extract_text(pdf_path: str) -> str:
             return text
     except Exception:
         pass
-    # Fallback to PyMuPDF if available (often better with complex PDFs)
+
+    # 2) Fallback to PyMuPDF (handles complex layout better, but not pure scans)
     try:
         if fitz is not None:
             with fitz.open(pdf_path) as doc:
@@ -64,6 +75,21 @@ def extract_text(pdf_path: str) -> str:
                     return text2
     except Exception:
         pass
+
+    # 3) OCR fallback for scanned PDFs (requires poppler + tesseract installed)
+    try:
+        if convert_from_path is not None and pytesseract is not None:
+            poppler_path = os.getenv("POPPLER_PATH", None)
+            images = convert_from_path(pdf_path, dpi=200, poppler_path=poppler_path) if poppler_path else convert_from_path(pdf_path, dpi=200)
+            ocr_text_parts: List[str] = []
+            for img in images:
+                ocr_text_parts.append(pytesseract.image_to_string(img))
+            ocr_text = "\n".join(ocr_text_parts)
+            if ocr_text and ocr_text.strip():
+                return ocr_text
+    except Exception:
+        pass
+
     return ""
 
 
@@ -142,7 +168,6 @@ def extract_gnpa_answer(text: str) -> Optional[str]:
             best, best_nums, best_score = sent, nums, sc
     if not best:
         return None
-    # Ensure the sentence is not clearly about excluded entities
     if EXCLUDE_ENTITIES.search(best):
         return None
     latest = best_nums[0]
@@ -205,7 +230,12 @@ with st.sidebar:
                 build_index_from_docs(docs_dir="docs", chunk_size=500, overlap=100, index_file="faiss_index.idx", chunks_file="chunks.pkl")
                 st.success("Index rebuilt successfully.")
             except Exception as e:
-                st.error(f"Failed to rebuild: {e}")
+                # Give actionable hints for OCR prerequisites
+                hint = ""
+                if "No text extracted" in str(e):
+                    if convert_from_path is None or pytesseract is None:
+                        hint = "\nHint: Install OCR deps: pdf2image, pytesseract; also install Poppler and Tesseract OCR on your system. Set POPPLER_PATH env var if needed."
+                st.error(f"Failed to rebuild: {e}{hint}")
 
 # Initialize chat history
 if "messages" not in st.session_state:
