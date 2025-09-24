@@ -1,9 +1,9 @@
-import faiss, pickle, os, glob
+import faiss, pickle, os, glob, re
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 import streamlit as st
 from pypdf import PdfReader
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # --- Caching loaders to avoid reloading on each interaction ---
 @st.cache_resource(show_spinner=False)
@@ -41,7 +41,7 @@ def extract_text(pdf_path: str) -> str:
     try:
         reader = PdfReader(pdf_path)
         return "\n".join([p.extract_text() or "" for p in reader.pages])
-    except Exception as e:
+    except Exception:
         return ""
 
 
@@ -71,10 +71,41 @@ def build_index_from_docs(docs_dir: str, chunk_size: int, overlap: int, index_fi
     faiss.write_index(index, index_file)
 
 
-def search_docs(query: str, embedder: SentenceTransformer, index, all_chunks, top_k: int = 3):
+def search_docs(query: str, embedder: SentenceTransformer, index, all_chunks, top_k: int = 5):
     query_embedding = embedder.encode([query])
     distances, indices = index.search(query_embedding, top_k)
     return [all_chunks[i][1] for i in indices[0]]
+
+
+# --- Domain aware extractors ---
+GNPA_PATTERNS = [
+    re.compile(r"gross\s*npa\w*\s*(?:for\s+bf[l|i])?.{0,40}?([0-9]+\.?[0-9]*)\s*%", re.I),
+    re.compile(r"gnpa\w*.{0,40}?([0-9]+\.?[0-9]*)\s*%", re.I),
+]
+PREV_PATTERNS = [
+    re.compile(r"up\s*from\s*([0-9]+\.?[0-9]*)\s*%", re.I),
+    re.compile(r"vs\.?\s*([0-9]+\.?[0-9]*)\s*%", re.I),
+    re.compile(r"previous\s*quarter.{0,20}?([0-9]+\.?[0-9]*)\s*%", re.I),
+]
+
+def extract_gnpa_answer(text: str) -> Optional[str]:
+    latest = None
+    prev = None
+    for pat in GNPA_PATTERNS:
+        m = pat.search(text)
+        if m:
+            latest = m.group(1)
+            break
+    for pat in PREV_PATTERNS:
+        m = pat.search(text)
+        if m:
+            prev = m.group(1)
+            break
+    if latest:
+        if prev:
+            return f"GNPAs for BFL for the latest quarter are {latest}%, up from {prev}% last quarter."
+        return f"GNPAs for BFL for the latest quarter are {latest}%."
+    return None
 
 
 def answer_question(question: str):
@@ -82,8 +113,15 @@ def answer_question(question: str):
     index, all_chunks = load_index_and_chunks()
     qa = load_qa_pipeline()
 
-    context_chunks = search_docs(question, embedder, index, all_chunks, top_k=3)
-    context = " ".join(context_chunks)
+    context_chunks = search_docs(question, embedder, index, all_chunks, top_k=8)
+    context = " \n".join(context_chunks)
+
+    # Heuristic: if user asks about GNPA, prefer precise extractor
+    if re.search(r"\b(gross\s*npa|gnpa)\b", question, re.I):
+        extracted = extract_gnpa_answer(context)
+        if extracted:
+            return extracted, context_chunks
+
     result = qa(question=question, context=context)
     return result["answer"], context_chunks
 
